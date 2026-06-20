@@ -7,7 +7,7 @@ const BASE = 'https://worldcup26.ir'
 
 // インメモリキャッシュ (TTL: 30秒)
 const cache: Record<string, { data: any; ts: number }> = {}
-const CACHE_TTL = 30_000
+const CACHE_TTL = 30000
 
 async function fetchWCCached(path: string, timeoutMs = 15000): Promise<any> {
   const now = Date.now()

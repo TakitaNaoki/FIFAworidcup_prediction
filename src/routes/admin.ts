@@ -124,127 +124,243 @@ admin.get('/participants', async (c) => {
   return c.json({ success: true, data: result.results })
 })
 
-// Google Sheets から賭けを同期
-admin.post('/sync-sheets', async (c) => {
-  const apiKey = c.env.GOOGLE_SHEETS_API_KEY
-  const spreadsheetId = c.env.GOOGLE_SPREADSHEET_ID
-  const db = c.env.DB
+// Google Sheets プレビュー (同期前の確認用)
+admin.post('/preview-sheets', async (c) => {
+  const body = await c.req.json<{
+    spreadsheet_id: string
+    api_key: string
+    sheet_name?: string
+  }>()
+  const { spreadsheet_id, api_key, sheet_name } = body
 
-  if (!apiKey || !spreadsheetId) {
-    return c.json({
-      success: false,
-      error: 'Google Sheets APIキーまたはスプレッドシートIDが設定されていません'
-    }, 400)
+  if (!api_key || !spreadsheet_id) {
+    return c.json({ success: false, error: 'APIキーとSpreadsheet IDは必須です' }, 400)
   }
 
   try {
-    // Google Sheets API でデータ取得
-    const url = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/シート1!A:AZ?key=${apiKey}`
+    // シート一覧を取得
+    const metaUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheet_id}?key=${api_key}`
+    const metaRes = await fetch(metaUrl)
+    const meta = await metaRes.json() as any
+    if (meta.error) {
+      return c.json({ success: false, error: `Sheets API: ${meta.error.message}` }, 400)
+    }
+
+    const sheets = (meta.sheets || []).map((s: any) => s.properties.title)
+    const targetSheet = sheet_name || sheets[0] || 'フォームの回答 1'
+
+    // データ取得 (先頭3行 = ヘッダー + サンプル2行)
+    const encodedSheet = encodeURIComponent(targetSheet)
+    const rangeUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheet_id}/values/${encodedSheet}!A1:BZ3?key=${api_key}`
+    const rangeRes = await fetch(rangeUrl)
+    const rangeData = await rangeRes.json() as any
+    if (rangeData.error) {
+      return c.json({ success: false, error: `シート読み込み失敗: ${rangeData.error.message}` }, 400)
+    }
+
+    const values = rangeData.values || []
+    const headers = values[0] || []
+
+    // 名前列とbet列を自動検出
+    const nameColIndex = headers.findIndex((h: string) =>
+      /名前|氏名|name/i.test(h)
+    )
+    const betCols: { index: number; header: string }[] = []
+    const db = c.env.DB
+    const allCountries = await db.prepare('SELECT id, name_ja, name, code FROM countries').all<{
+      id: number; name_ja: string; name: string; code: string
+    }>()
+    const countryNames = new Set([
+      ...allCountries.results.map(c => c.name_ja),
+      ...allCountries.results.map(c => c.name),
+      ...allCountries.results.map(c => c.code),
+    ])
+
+    for (let i = 0; i < headers.length; i++) {
+      if (i === nameColIndex || i === 0) continue
+      const h = headers[i].trim()
+      const bare = h.replace(/\s*[\[\(（【].*/, '').trim()
+      if (countryNames.has(h) || countryNames.has(bare)) {
+        betCols.push({ index: i, header: h })
+      }
+    }
+
+    return c.json({
+      success: true,
+      sheets,
+      target_sheet: targetSheet,
+      headers,
+      name_col_index: nameColIndex,
+      bet_cols: betCols,
+      sample_rows: values.slice(1, 3),
+    })
+  } catch (e: any) {
+    return c.json({ success: false, error: e.message }, 500)
+  }
+})
+
+// Google Sheets から賭けを同期
+admin.post('/sync-sheets', async (c) => {
+  const body = await c.req.json<{
+    spreadsheet_id: string
+    api_key: string
+    sheet_name?: string
+    overwrite?: boolean   // true = 既存の賭けを上書き, false = スキップ
+  }>()
+  const { spreadsheet_id, api_key, sheet_name, overwrite = true } = body
+  const db = c.env.DB
+
+  if (!api_key || !spreadsheet_id) {
+    return c.json({ success: false, error: 'APIキーとSpreadsheet IDは必須です' }, 400)
+  }
+
+  try {
+    // シート名を解決
+    const metaUrl = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheet_id}?key=${api_key}`
+    const metaRes = await fetch(metaUrl)
+    const meta = await metaRes.json() as any
+    if (meta.error) {
+      return c.json({ success: false, error: `Sheets API: ${meta.error.message}` }, 400)
+    }
+    const sheets = (meta.sheets || []).map((s: any) => s.properties.title) as string[]
+    const targetSheet = sheet_name || sheets[0] || 'フォームの回答 1'
+
+    // 全行取得
+    const encodedSheet = encodeURIComponent(targetSheet)
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheet_id}/values/${encodedSheet}!A:BZ?key=${api_key}`
     const response = await fetch(url)
     const data = await response.json() as any
+    if (data.error) {
+      return c.json({ success: false, error: `データ取得失敗: ${data.error.message}` }, 400)
+    }
 
     if (!data.values || data.values.length < 2) {
-      return c.json({ success: false, error: 'データが見つかりません' }, 400)
+      return c.json({ success: false, error: 'シートにデータがありません (ヘッダー行含む2行以上必要)' }, 400)
     }
 
     const headers = data.values[0] as string[]
     const rows = data.values.slice(1) as string[][]
 
-    // ヘッダー解析: "タイムスタンプ", "お名前", "国名(pts)"...
-    const nameColIndex = headers.findIndex(h =>
-      h.includes('名前') || h.includes('name') || h.toLowerCase().includes('name')
-    )
-
+    // --- 列マッピング解析 ---
+    // 名前列: "名前", "お名前", "氏名", "name" を含む列
+    const nameColIndex = headers.findIndex(h => /名前|氏名|name/i.test(h))
     if (nameColIndex === -1) {
-      return c.json({ success: false, error: '名前の列が見つかりません' }, 400)
+      return c.json({
+        success: false,
+        error: `名前の列が見つかりません。ヘッダー: [${headers.join(', ')}]`
+      }, 400)
     }
 
-    // 全国コードのマッピング取得
-    const allCountries = await db.prepare(
-      'SELECT id, name_ja, code FROM countries'
-    ).all<{ id: number; name_ja: string; code: string }>()
-    const countryMap = new Map(allCountries.results.map(c => [c.name_ja, c]))
-    const countryCodeMap = new Map(allCountries.results.map(c => [c.code, c]))
+    // 国マッピング: name_ja, name, code すべてで照合
+    const allCountries = await db.prepare('SELECT id, name_ja, name, code FROM countries').all<{
+      id: number; name_ja: string; name: string; code: string
+    }>()
+    const countryMap = new Map<string, number>()
+    for (const c of allCountries.results) {
+      countryMap.set(c.name_ja.trim(), c.id)
+      countryMap.set(c.name.trim(), c.id)
+      countryMap.set(c.code.trim(), c.id)
+      // "国名 [ポイント入力]" のような括弧付きヘッダーにも対応
+      const bare = c.name_ja.replace(/\s*[\[\(（【].*/, '').trim()
+      if (bare !== c.name_ja) countryMap.set(bare, c.id)
+    }
 
-    const importResults = []
-    const importErrors = []
+    // ヘッダーの各列がどの国IDに対応するかを事前解決
+    const colToCountryId: (number | null)[] = headers.map((h, i) => {
+      if (i === nameColIndex || i === 0) return null
+      const bare = h.trim().replace(/\s*[\[\(（【].*/, '').trim()
+      return countryMap.get(h.trim()) ?? countryMap.get(bare) ?? null
+    })
+
+    const unmatchedCols = headers
+      .map((h, i) => ({ h, i }))
+      .filter(({ i }) => i !== nameColIndex && i !== 0 && colToCountryId[i] === null)
+      .map(({ h }) => h)
+
+    const importResults: { name: string; total_points: number; bets: number }[] = []
+    const importErrors: { name: string; error: string }[] = []
+    const skipped: string[] = []
 
     for (const row of rows) {
       const participantName = row[nameColIndex]?.trim()
       if (!participantName) continue
 
       try {
-        // 参加者取得または作成
-        let participant = await db.prepare(
+        // 既存参加者チェック
+        const existing = await db.prepare(
           'SELECT id FROM participants WHERE name = ?'
         ).bind(participantName).first<{ id: number }>()
 
-        if (!participant) {
-          const created = await db.prepare(
-            'INSERT INTO participants (name) VALUES (?) RETURNING *'
-          ).bind(participantName).first<{ id: number }>()
-          participant = created!
-        }
-
-        // 既存の賭けを削除
-        await db.prepare('DELETE FROM bets WHERE participant_id = ?').bind(participant.id).run()
-
-        let totalPoints = 0
-        const betsToInsert: { countryId: number; points: number }[] = []
-
-        // 各列を国への賭けとして解析
-        for (let i = 0; i < headers.length; i++) {
-          if (i === nameColIndex || i === 0) continue // タイムスタンプと名前列をスキップ
-
-          const header = headers[i]
-          const value = parseInt(row[i] || '0', 10)
-          if (isNaN(value) || value <= 0) continue
-
-          // ヘッダーから国を特定 (日本語名またはコード)
-          let country = countryMap.get(header.trim())
-          if (!country) {
-            // コードで試みる
-            const code = header.match(/\(([A-Z]{3})\)/)?.[1]
-            if (code) country = countryCodeMap.get(code)
-          }
-
-          if (country) {
-            betsToInsert.push({ countryId: country.id, points: value })
-            totalPoints += value
-          }
-        }
-
-        if (totalPoints > 100) {
-          importErrors.push({ name: participantName, error: `合計${totalPoints}pts > 100pts` })
+        if (existing && !overwrite) {
+          skipped.push(participantName)
           continue
         }
 
-        // 賭けを挿入
-        for (const bet of betsToInsert) {
-          await db.prepare(`
-            INSERT INTO bets (participant_id, country_id, points) VALUES (?, ?, ?)
-          `).bind(participant.id, bet.countryId, bet.points).run()
+        // 参加者 upsert
+        let participantId: number
+        if (existing) {
+          participantId = existing.id
+        } else {
+          const created = await db.prepare(
+            'INSERT INTO participants (name) VALUES (?) RETURNING id'
+          ).bind(participantName).first<{ id: number }>()
+          participantId = created!.id
         }
 
-        importResults.push({ name: participantName, total_points: totalPoints })
+        // 賭け解析
+        let totalPoints = 0
+        const betsToInsert: { countryId: number; points: number }[] = []
+
+        for (let i = 0; i < headers.length; i++) {
+          const countryId = colToCountryId[i]
+          if (!countryId) continue
+          const raw = row[i]?.trim() || '0'
+          const pts = parseInt(raw, 10)
+          if (isNaN(pts) || pts <= 0) continue
+          betsToInsert.push({ countryId, points: pts })
+          totalPoints += pts
+        }
+
+        if (totalPoints > 100) {
+          importErrors.push({ name: participantName, error: `合計${totalPoints}pts超過 (最大100pts)` })
+          continue
+        }
+        if (betsToInsert.length === 0) {
+          importErrors.push({ name: participantName, error: '賭けが0件 (ポイント入力なし)' })
+          continue
+        }
+
+        // 賭け upsert
+        await db.prepare('DELETE FROM bets WHERE participant_id = ?').bind(participantId).run()
+        for (const bet of betsToInsert) {
+          await db.prepare(
+            'INSERT INTO bets (participant_id, country_id, points) VALUES (?, ?, ?)'
+          ).bind(participantId, bet.countryId, bet.points).run()
+        }
+
+        importResults.push({ name: participantName, total_points: totalPoints, bets: betsToInsert.length })
       } catch (e: any) {
         importErrors.push({ name: participantName, error: e.message })
       }
     }
 
     // ログ記録
-    await db.prepare(`
-      INSERT INTO sync_logs (rows_processed, status, message)
-      VALUES (?, ?, ?)
-    `).bind(importResults.length, importErrors.length > 0 ? 'partial' : 'success',
-      `Google Sheets同期: 成功${importResults.length}件, エラー${importErrors.length}件`
+    await db.prepare(
+      'INSERT INTO sync_logs (rows_processed, status, message) VALUES (?, ?, ?)'
+    ).bind(
+      importResults.length,
+      importErrors.length > 0 ? 'partial' : 'success',
+      `Google Sheets同期 [${targetSheet}]: 成功${importResults.length}件, エラー${importErrors.length}件, スキップ${skipped.length}件`
     ).run()
 
     return c.json({
       success: true,
+      sheet: targetSheet,
       imported: importResults.length,
+      skipped: skipped.length,
+      results: importResults,
       errors: importErrors,
-      results: importResults
+      unmatched_columns: unmatchedCols,
     })
 
   } catch (e: any) {

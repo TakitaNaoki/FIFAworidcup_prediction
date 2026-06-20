@@ -650,40 +650,99 @@ function adminPageHtml(): string {
 
     <!-- Google Sheets 同期 -->
     <section id="sync-section" class="hidden p-5 rounded-2xl bg-white/5 border border-white/10">
-      <h2 class="text-lg font-bold text-yellow-400 mb-4">
-        <i class="fas fa-sync mr-2"></i>Google Sheets 同期
+      <h2 class="text-lg font-bold text-yellow-400 mb-1">
+        <i class="fas fa-table mr-2"></i>Google Forms / Sheets 同期
       </h2>
-      <div class="grid gap-4">
+      <p class="text-xs text-gray-400 mb-4">
+        Google Forms の回答スプレッドシートから参加者の予想を一括インポートします.
+        <a href="#sheets-guide" onclick="toggleGuide()" class="text-blue-400 underline ml-1">設定ガイドを見る</a>
+      </p>
+
+      <!-- 設定ガイド (折りたたみ) -->
+      <div id="sheets-guide" class="hidden mb-4 p-4 rounded-xl bg-blue-900/20 border border-blue-500/30 text-xs text-gray-300 space-y-2">
+        <p class="font-bold text-blue-300">📋 Google Formsフォームの作り方</p>
+        <ol class="list-decimal list-inside space-y-1 text-gray-400">
+          <li>Google Forms で新規フォームを作成</li>
+          <li><strong class="text-white">「お名前」</strong> という名前の記述式質問を追加 (必須)</li>
+          <li>各チーム名 (例: <strong class="text-white">日本, ブラジル, ...</strong>) を題名にした
+              <strong class="text-white">「記述式」または「プルダウン」</strong>質問を追加
+              → 参加者が配分ポイント (0〜100の整数) を入力</li>
+          <li>回答 → <strong class="text-white">「スプレッドシートにリンク」</strong> でスプレッドシートを作成</li>
+        </ol>
+        <p class="font-bold text-blue-300 pt-1">🔑 Google Sheets API キーの取得</p>
+        <ol class="list-decimal list-inside space-y-1 text-gray-400">
+          <li><a href="https://console.cloud.google.com/" target="_blank" class="text-blue-400 underline">Google Cloud Console</a> でプロジェクト作成</li>
+          <li>「APIとサービス」→「ライブラリ」→ Google Sheets API を有効化</li>
+          <li>「認証情報」→「APIキーを作成」→ キーをコピー</li>
+          <li>スプレッドシートを <strong class="text-white">「リンクを知っている全員が閲覧可能」</strong> に設定</li>
+        </ol>
+        <p class="font-bold text-blue-300 pt-1">🆔 Spreadsheet ID の確認</p>
+        <p class="text-gray-400">スプレッドシートのURLの <code class="bg-black/30 px-1 rounded">docs.google.com/spreadsheets/d/<strong class="text-white">【ここ】</strong>/edit</code> の部分</p>
+      </div>
+
+      <div class="grid gap-3">
+        <!-- スプレッドシートURL or ID -->
         <div>
-          <label class="block text-sm text-gray-400 mb-1">Spreadsheet ID</label>
-          <input type="text" id="spreadsheet-id" placeholder="Google SpreadsheetsのURL内のID"
+          <label class="block text-xs text-gray-400 mb-1">スプレッドシートURL または ID <span class="text-red-400">*</span></label>
+          <input type="text" id="spreadsheet-id"
+            placeholder="https://docs.google.com/spreadsheets/d/XXXXXX/edit  または  XXXXXX"
+            class="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-2 text-white text-sm focus:outline-none focus:border-yellow-400"
+            oninput="extractSheetId(this)">
+          <p id="sheet-id-display" class="text-xs text-green-400 mt-1 hidden"></p>
+        </div>
+        <!-- API Key -->
+        <div>
+          <label class="block text-xs text-gray-400 mb-1">Google Sheets API Key <span class="text-red-400">*</span></label>
+          <input type="password" id="api-key" placeholder="AIza..."
             class="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-2 text-white text-sm focus:outline-none focus:border-yellow-400">
         </div>
+        <!-- シート名 (オプション) -->
         <div>
-          <label class="block text-sm text-gray-400 mb-1">API Key</label>
-          <input type="text" id="api-key" placeholder="Google Sheets APIキー"
+          <label class="block text-xs text-gray-400 mb-1">シート名 (省略時は最初のシートを使用)</label>
+          <input type="text" id="sheet-name" placeholder="フォームの回答 1"
             class="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-2 text-white text-sm focus:outline-none focus:border-yellow-400">
         </div>
-        <div class="flex gap-3">
+        <!-- 上書きモード -->
+        <label class="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+          <input type="checkbox" id="overwrite-mode" checked class="w-4 h-4 rounded accent-yellow-400">
+          既存の参加者データを上書きする
+        </label>
+        <!-- アクションボタン -->
+        <div class="flex gap-2 flex-wrap">
+          <button onclick="previewSheets()"
+            class="px-4 py-2 rounded-xl bg-gray-700 hover:bg-gray-600 text-white text-sm font-bold">
+            <i class="fas fa-eye mr-1"></i>プレビュー確認
+          </button>
           <button onclick="syncSheets()"
-            class="flex-1 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold">
-            <i class="fas fa-cloud-download-alt mr-2"></i>Sheetsから同期
+            class="flex-1 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm">
+            <i class="fas fa-cloud-download-alt mr-1"></i>Sheetsから同期実行
           </button>
           <button onclick="showManualImport()"
-            class="flex-1 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold">
-            <i class="fas fa-file-import mr-2"></i>手動インポート
+            class="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-sm font-bold">
+            <i class="fas fa-file-import mr-1"></i>手動JSON
           </button>
         </div>
-        <div id="sync-result" class="hidden p-3 rounded-xl bg-green-900/30 border border-green-500/30">
-          <p id="sync-result-text" class="text-sm text-green-400"></p>
-        </div>
+      </div>
+
+      <!-- プレビュー結果 -->
+      <div id="preview-result" class="hidden mt-4 p-4 rounded-xl bg-gray-900/50 border border-white/10">
+        <p class="text-sm font-bold text-yellow-400 mb-2">📊 シートプレビュー</p>
+        <div id="preview-content" class="text-xs text-gray-300 space-y-1"></div>
+      </div>
+
+      <!-- 同期結果 -->
+      <div id="sync-result" class="hidden mt-4 p-4 rounded-xl">
+        <p id="sync-result-text" class="text-sm font-bold mb-2"></p>
+        <div id="sync-result-detail" class="text-xs space-y-1"></div>
       </div>
 
       <!-- 手動インポート -->
       <div id="manual-import" class="hidden mt-4 p-4 rounded-xl bg-black/30 border border-white/10">
-        <h3 class="text-sm font-bold text-yellow-400 mb-2">手動JSONインポート</h3>
-        <p class="text-xs text-gray-400 mb-2">フォーマット: [{"name": "名前", "bets": [{"country_code": "JPN", "points": 30}, ...]}, ...]</p>
-        <textarea id="manual-json" rows="5" placeholder='[{"name":"田中","bets":[{"country_code":"JPN","points":50},{"country_code":"BRA","points":50}]}]'
+        <h3 class="text-sm font-bold text-yellow-400 mb-1">手動JSONインポート</h3>
+        <p class="text-xs text-gray-400 mb-2">フォーマット例:</p>
+        <pre class="text-xs text-gray-500 bg-black/30 rounded p-2 mb-2 overflow-x-auto">[{"name":"田中","bets":[{"country_code":"JPN","points":40},{"country_code":"BRA","points":60}]}]</pre>
+        <textarea id="manual-json" rows="6"
+          placeholder='[{"name":"田中","bets":[{"country_code":"JPN","points":50},{"country_code":"BRA","points":50}]}]'
           class="w-full bg-white/10 border border-white/20 rounded-xl px-4 py-2 text-white text-xs font-mono mb-2 focus:outline-none focus:border-yellow-400"></textarea>
         <button onclick="importManual()"
           class="w-full py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold text-sm">
@@ -918,32 +977,136 @@ function adminPageHtml(): string {
       loadSummary()
     }
 
+    function toggleGuide() {
+      const el = document.getElementById('sheets-guide')
+      el.classList.toggle('hidden')
+    }
+
+    // URL から Spreadsheet ID を自動抽出
+    function extractSheetId(input) {
+      const val = input.value.trim()
+      const m = val.match(/spreadsheets\/d\/([a-zA-Z0-9_-]+)/)
+      const display = document.getElementById('sheet-id-display')
+      if (m) {
+        display.textContent = '✅ ID: ' + m[1]
+        display.classList.remove('hidden')
+      } else {
+        display.classList.add('hidden')
+      }
+    }
+
+    function getSheetInputs() {
+      const rawId = document.getElementById('spreadsheet-id').value.trim()
+      const m = rawId.match(/spreadsheets\/d\/([a-zA-Z0-9_-]+)/)
+      const spreadsheet_id = m ? m[1] : rawId
+      const api_key = document.getElementById('api-key').value.trim()
+      const sheet_name = document.getElementById('sheet-name').value.trim() || undefined
+      const overwrite = document.getElementById('overwrite-mode').checked
+      return { spreadsheet_id, api_key, sheet_name, overwrite }
+    }
+
+    async function previewSheets() {
+      const { spreadsheet_id, api_key, sheet_name } = getSheetInputs()
+      if (!spreadsheet_id || !api_key) {
+        alert('スプレッドシートIDとAPIキーを入力してください')
+        return
+      }
+      const previewDiv = document.getElementById('preview-result')
+      const previewContent = document.getElementById('preview-content')
+      previewDiv.classList.remove('hidden')
+      previewContent.innerHTML = '<p class="text-gray-400 animate-pulse">読み込み中...</p>'
+
+      try {
+        const res = await fetch('/api/admin/preview-sheets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Admin-Password': adminPassword },
+          body: JSON.stringify({ spreadsheet_id, api_key, sheet_name })
+        })
+        const json = await res.json()
+        if (!json.success) {
+          previewContent.innerHTML = \`<p class="text-red-400">❌ \${json.error}</p>\`
+          return
+        }
+        const nameIdx = json.name_col_index
+        const betCols = json.bet_cols || []
+        previewContent.innerHTML = \`
+          <p class="text-green-400 font-bold">✅ シート: \${json.target_sheet}</p>
+          <p>利用可能なシート: \${json.sheets.join(', ')}</p>
+          <p class="mt-1">名前列: <span class="text-yellow-300">列\${nameIdx + 1} = "\${json.headers[nameIdx] || '?'}"</span></p>
+          <p>認識した国列: <span class="text-blue-300">\${betCols.length}列</span>
+            \${betCols.length > 0 ? '(' + betCols.slice(0, 5).map(c => c.header).join(', ') + (betCols.length > 5 ? '...' : '') + ')' : ''}</p>
+          \${json.sample_rows.length > 0 ? \`
+          <div class="mt-2">
+            <p class="text-gray-400">サンプル回答 (先頭\${json.sample_rows.length}件):</p>
+            \${json.sample_rows.map(row => \`
+              <div class="bg-black/20 rounded p-2 mt-1">
+                名前: <span class="text-white">\${row[nameIdx] || '(空)'}</span>
+                — ポイント入力あり: \${betCols.filter(c => row[c.index] && parseInt(row[c.index]) > 0).length}国
+              </div>
+            \`).join('')}
+          </div>\` : ''}
+        \`
+      } catch (e) {
+        previewContent.innerHTML = \`<p class="text-red-400">❌ \${e.message}</p>\`
+      }
+    }
+
     async function syncSheets() {
-      const spreadsheetId = document.getElementById('spreadsheet-id').value.trim()
-      const apiKey = document.getElementById('api-key').value.trim()
-      if (!spreadsheetId || !apiKey) {
-        alert('Spreadsheet IDとAPIキーを入力してください')
+      const { spreadsheet_id, api_key, sheet_name, overwrite } = getSheetInputs()
+      if (!spreadsheet_id || !api_key) {
+        alert('スプレッドシートIDとAPIキーを入力してください')
         return
       }
 
-      // APIキーとSpreadsheetsIDを一時的に設定 (本来は環境変数で管理)
-      const res = await fetch('/api/admin/sync-sheets', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Admin-Password': adminPassword },
-      })
-      const json = await res.json()
       const resultDiv = document.getElementById('sync-result')
       const resultText = document.getElementById('sync-result-text')
+      const resultDetail = document.getElementById('sync-result-detail')
       resultDiv.classList.remove('hidden')
-      if (json.success) {
-        resultText.textContent = '✅ 同期完了: ' + json.imported + '件インポート'
-        resultDiv.className = 'p-3 rounded-xl bg-green-900/30 border border-green-500/30'
-      } else {
-        resultText.textContent = '❌ エラー: ' + json.error
-        resultDiv.className = 'p-3 rounded-xl bg-red-900/30 border border-red-500/30'
+      resultDiv.className = 'mt-4 p-4 rounded-xl bg-gray-900/50 border border-white/10'
+      resultText.textContent = '⏳ 同期中...'
+      resultDetail.innerHTML = ''
+
+      try {
+        const res = await fetch('/api/admin/sync-sheets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Admin-Password': adminPassword },
+          body: JSON.stringify({ spreadsheet_id, api_key, sheet_name, overwrite })
+        })
+        const json = await res.json()
+
+        if (json.success) {
+          resultDiv.className = 'mt-4 p-4 rounded-xl bg-green-900/20 border border-green-500/30'
+          resultText.textContent = \`✅ 同期完了 [シート: \${json.sheet}]\`
+          let detail = \`<p class="text-green-300">インポート成功: \${json.imported}件</p>\`
+          if (json.skipped > 0) detail += \`<p class="text-gray-400">スキップ (既存): \${json.skipped}件</p>\`
+          if (json.errors.length > 0) {
+            detail += \`<p class="text-red-400 mt-1">エラー \${json.errors.length}件:</p>\`
+            detail += json.errors.slice(0, 5).map(e =>
+              \`<p class="text-red-300 ml-2">• \${e.name}: \${e.error}</p>\`
+            ).join('')
+          }
+          if (json.unmatched_columns.length > 0) {
+            detail += \`<p class="text-yellow-400 mt-1">⚠ 国として認識できなかった列: \${json.unmatched_columns.join(', ')}</p>\`
+          }
+          if (json.results.length > 0) {
+            detail += \`<div class="mt-2 space-y-1">\` +
+              json.results.map(r =>
+                \`<p class="text-gray-300">• \${r.name} — \${r.total_points}pts / \${r.bets}国</p>\`
+              ).join('') + \`</div>\`
+          }
+          resultDetail.innerHTML = detail
+          loadParticipants()
+          loadSummary()
+        } else {
+          resultDiv.className = 'mt-4 p-4 rounded-xl bg-red-900/20 border border-red-500/30'
+          resultText.textContent = '❌ 同期失敗'
+          resultDetail.innerHTML = \`<p class="text-red-300">\${json.error}</p>\`
+        }
+      } catch (e) {
+        resultDiv.className = 'mt-4 p-4 rounded-xl bg-red-900/20 border border-red-500/30'
+        resultText.textContent = '❌ 通信エラー'
+        resultDetail.innerHTML = \`<p class="text-red-300">\${e.message}</p>\`
       }
-      loadParticipants()
-      loadSummary()
     }
 
     function showManualImport() {
