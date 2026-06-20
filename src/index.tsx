@@ -1588,6 +1588,15 @@ function worldcupPageHtml(): string {
       return base ? (base + sandboxPath) : prodPath
     }
 
+    // /get/games は Worker経由だとTLSエラーになるため
+    // サンドボックス: プロキシ経由, 本番: worldcup26.ir に直接fetch (CORS *)
+    function gamesUrl() {
+      const base = wcApiBase()
+      return base
+        ? (base + '/proxy/wc/matches')
+        : 'https://worldcup26.ir/get/games'
+    }
+
     async function loadAll() {
       document.getElementById('loading').classList.remove('hidden')
       document.querySelectorAll('[id^="view-"]').forEach(el => el.classList.add('hidden'))
@@ -1622,17 +1631,48 @@ function worldcupPageHtml(): string {
     // 試合データ取得
     async function loadMatchesViaProxy() {
       try {
-        const res = await fetch(wcUrl('/proxy/wc/matches', '/api/wc/matches'))
-        const data = await res.json()
-        if (!data.success) throw new Error(data.error || 'proxy error')
+        const url = gamesUrl()
+        const res = await fetch(url)
+        const raw = await res.json()
 
-        // name_jaをTEAM_JA_MAPで補完
-        allMatches = (data.matches || []).map(m => ({
-          ...m,
-          home_team: m.home_team ? { ...m.home_team, name_ja: TEAM_JA_MAP[String(m.home_team.id)] || m.home_team.name_en } : null,
-          away_team: m.away_team ? { ...m.away_team, name_ja: TEAM_JA_MAP[String(m.away_team.id)] || m.away_team.name_en } : null,
-        }))
+        // プロキシ経由 ({success, matches}) と直接API ({games}) の両方に対応
+        let rawMatches
+        if (raw.success !== undefined) {
+          // プロキシ or Worker API レスポンス
+          if (!raw.success) throw new Error(raw.error || 'proxy error')
+          rawMatches = (raw.matches || []).map(m => ({
+            ...m,
+            home_team: m.home_team ? { ...m.home_team, name_ja: TEAM_JA_MAP[String(m.home_team.id)] || m.home_team.name_en } : null,
+            away_team: m.away_team ? { ...m.away_team, name_ja: TEAM_JA_MAP[String(m.away_team.id)] || m.away_team.name_en } : null,
+          }))
+        } else {
+          // worldcup26.ir 直接レスポンス ({games: [...]})
+          rawMatches = (raw.games || []).map(g => ({
+            id: g.id,
+            group: g.group,
+            type: g.type,
+            matchday: g.matchday,
+            local_date: g.local_date,
+            finished: g.finished === 'TRUE' || g.finished === true,
+            time_elapsed: g.time_elapsed,
+            home_team_id: g.home_team_id,
+            away_team_id: g.away_team_id,
+            home_team: allTeams[g.home_team_id]
+              ? { ...allTeams[g.home_team_id], name_ja: TEAM_JA_MAP[String(g.home_team_id)] || allTeams[g.home_team_id].name_en }
+              : null,
+            away_team: allTeams[g.away_team_id]
+              ? { ...allTeams[g.away_team_id], name_ja: TEAM_JA_MAP[String(g.away_team_id)] || allTeams[g.away_team_id].name_en }
+              : null,
+            home_team_label: g.home_team_label || null,
+            away_team_label: g.away_team_label || null,
+            home_score: g.home_score,
+            away_score: g.away_score,
+            home_scorers: g.home_scorers,
+            away_scorers: g.away_scorers,
+          }))
+        }
 
+        allMatches = rawMatches
         renderToday(allMatches)
         renderBracket(allMatches)
         renderSchedule()
