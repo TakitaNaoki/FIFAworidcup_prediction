@@ -6,6 +6,7 @@ import countriesRoute from './routes/countries'
 import participantsRoute from './routes/participants'
 import betsRoute from './routes/bets'
 import adminRoute from './routes/admin'
+import wcRoute from './routes/worldcup'
 
 const app = new Hono<{ Bindings: Bindings }>()
 
@@ -20,6 +21,7 @@ app.route('/api/countries', countriesRoute)
 app.route('/api/participants', participantsRoute)
 app.route('/api/bets', betsRoute)
 app.route('/api/admin', adminRoute)
+app.route('/api/wc', wcRoute)
 
 // ヘルスチェック
 app.get('/api/health', (c) => c.json({ status: 'ok', timestamp: new Date().toISOString() }))
@@ -37,6 +39,11 @@ app.get('/admin', (c) => {
 // フォーム入力ページ
 app.get('/bet', (c) => {
   return c.html(betPageHtml())
+})
+
+// W杯情報ページ (グループ + トーナメント)
+app.get('/worldcup', (c) => {
+  return c.html(worldcupPageHtml())
 })
 
 function mainPageHtml(): string {
@@ -81,6 +88,9 @@ function mainPageHtml(): string {
           class="tab-btn px-4 py-2 rounded-lg bg-white/10 text-white text-sm hover:bg-white/20">
           <i class="fas fa-chart-bar mr-1"></i>オッズ
         </button>
+        <a href="/worldcup" class="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700">
+          <i class="fas fa-futbol mr-1"></i>W杯情報
+        </a>
         <a href="/bet" class="px-4 py-2 rounded-lg bg-green-600 text-white text-sm hover:bg-green-700">
           <i class="fas fa-edit mr-1"></i>予想入力
         </a>
@@ -970,6 +980,507 @@ function adminPageHtml(): string {
       loadParticipants()
       loadSummary()
     }
+  </script>
+</body>
+</html>`
+}
+
+function worldcupPageHtml(): string {
+  return `<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>⚽ W杯情報 | WC2026</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
+  <style>
+    .trophy-bg { background: linear-gradient(135deg, #0d1b2a 0%, #1b2838 50%, #0d2137 100%); }
+    .card-hover { transition: all 0.2s ease; }
+    .card-hover:hover { transform: translateY(-1px); }
+    .live-pulse { animation: live 1.5s ease-in-out infinite; }
+    @keyframes live { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
+    .bracket-line { border-color: rgba(255,255,255,0.2); }
+    .match-card { transition: all 0.2s ease; }
+    .match-card:hover { background: rgba(255,255,255,0.08) !important; }
+    .winner-team { background: linear-gradient(135deg, rgba(246,211,101,0.2), rgba(253,160,133,0.1)); border-color: #f6d365 !important; }
+    .tab-active { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important; color:white !important; }
+    .scrollbar-hide::-webkit-scrollbar { display:none; }
+    .stage-badge-group { background: rgba(59,130,246,0.2); color: #93c5fd; border: 1px solid rgba(59,130,246,0.3); }
+    .stage-badge-r32 { background: rgba(168,85,247,0.2); color: #d8b4fe; border: 1px solid rgba(168,85,247,0.3); }
+    .stage-badge-r16 { background: rgba(239,68,68,0.2); color: #fca5a5; border: 1px solid rgba(239,68,68,0.3); }
+    .stage-badge-qf  { background: rgba(249,115,22,0.2); color: #fdba74; border: 1px solid rgba(249,115,22,0.3); }
+    .stage-badge-sf  { background: rgba(234,179,8,0.2); color: #fde047; border: 1px solid rgba(234,179,8,0.3); }
+    .stage-badge-final{ background: rgba(234,179,8,0.4); color: #fef08a; border: 1px solid rgba(234,179,8,0.5); }
+  </style>
+</head>
+<body class="trophy-bg min-h-screen text-white">
+
+  <!-- ヘッダー -->
+  <header class="bg-black/40 backdrop-blur-md border-b border-white/10 sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between flex-wrap gap-2">
+      <div class="flex items-center gap-3">
+        <a href="/" class="text-gray-400 hover:text-white text-lg"><i class="fas fa-arrow-left"></i></a>
+        <span class="text-2xl">⚽</span>
+        <div>
+          <h1 class="text-xl font-bold text-white">FIFA ワールドカップ 2026</h1>
+          <p class="text-xs text-blue-400">USA · Mexico · Canada | Jun 11 – Jul 19, 2026</p>
+        </div>
+      </div>
+      <div class="flex gap-2 flex-wrap">
+        <button onclick="showView('today')" id="btn-today"
+          class="view-btn px-3 py-1.5 rounded-lg text-sm font-bold bg-green-600 text-white">
+          <i class="fas fa-calendar-day mr-1"></i>本日の試合
+        </button>
+        <button onclick="showView('groups')" id="btn-groups"
+          class="view-btn px-3 py-1.5 rounded-lg text-sm bg-white/10 text-white hover:bg-white/20">
+          <i class="fas fa-table mr-1"></i>グループ
+        </button>
+        <button onclick="showView('bracket')" id="btn-bracket"
+          class="view-btn px-3 py-1.5 rounded-lg text-sm bg-white/10 text-white hover:bg-white/20">
+          <i class="fas fa-sitemap mr-1"></i>トーナメント
+        </button>
+        <button onclick="showView('schedule')" id="btn-schedule"
+          class="view-btn px-3 py-1.5 rounded-lg text-sm bg-white/10 text-white hover:bg-white/20">
+          <i class="fas fa-list mr-1"></i>全試合
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-4 py-5">
+
+    <!-- ローディング -->
+    <div id="loading" class="text-center py-16">
+      <div class="text-4xl mb-3">⚽</div>
+      <p class="text-gray-400 animate-pulse">データを読み込み中...</p>
+    </div>
+
+    <!-- 本日の試合 -->
+    <section id="view-today" class="hidden">
+      <div class="mb-4 flex items-center justify-between">
+        <h2 class="text-xl font-bold text-white"><i class="fas fa-calendar-day text-green-400 mr-2"></i>本日の試合</h2>
+        <button onclick="loadAll()" class="text-xs text-gray-400 hover:text-white px-2 py-1 rounded bg-white/10">
+          <i class="fas fa-sync mr-1"></i>更新
+        </button>
+      </div>
+      <div id="today-list" class="space-y-3"></div>
+    </section>
+
+    <!-- グループステージ -->
+    <section id="view-groups" class="hidden">
+      <h2 class="text-xl font-bold text-white mb-4"><i class="fas fa-table text-blue-400 mr-2"></i>グループステージ順位表</h2>
+      <div id="groups-grid" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4"></div>
+    </section>
+
+    <!-- トーナメントブラケット -->
+    <section id="view-bracket" class="hidden">
+      <h2 class="text-xl font-bold text-white mb-4"><i class="fas fa-sitemap text-purple-400 mr-2"></i>ノックアウトステージ</h2>
+
+      <!-- ステージタブ -->
+      <div class="flex gap-2 mb-5 flex-wrap">
+        <button onclick="showStage('r32')" id="stage-r32"
+          class="stage-btn px-3 py-1.5 rounded-lg text-xs font-bold stage-badge-r32">ラウンド32</button>
+        <button onclick="showStage('r16')" id="stage-r16"
+          class="stage-btn px-3 py-1.5 rounded-lg text-xs font-bold stage-badge-r16">ラウンド16</button>
+        <button onclick="showStage('qf')" id="stage-qf"
+          class="stage-btn px-3 py-1.5 rounded-lg text-xs font-bold stage-badge-qf">準々決勝</button>
+        <button onclick="showStage('sf')" id="stage-sf"
+          class="stage-btn px-3 py-1.5 rounded-lg text-xs font-bold stage-badge-sf">準決勝</button>
+        <button onclick="showStage('final')" id="stage-final"
+          class="stage-btn px-3 py-1.5 rounded-lg text-xs font-bold stage-badge-final">決勝・3位決定</button>
+      </div>
+
+      <div id="bracket-r32" class="bracket-stage"></div>
+      <div id="bracket-r16" class="bracket-stage hidden"></div>
+      <div id="bracket-qf" class="bracket-stage hidden"></div>
+      <div id="bracket-sf" class="bracket-stage hidden"></div>
+      <div id="bracket-final" class="bracket-stage hidden"></div>
+    </section>
+
+    <!-- 全試合スケジュール -->
+    <section id="view-schedule" class="hidden">
+      <div class="mb-4 flex items-center justify-between flex-wrap gap-3">
+        <h2 class="text-xl font-bold text-white"><i class="fas fa-list text-yellow-400 mr-2"></i>全試合一覧</h2>
+        <div class="flex gap-2 flex-wrap">
+          <button onclick="filterSchedule('all')" id="sched-all"
+            class="sched-btn px-3 py-1 rounded-lg text-xs font-bold bg-yellow-500 text-black">全て</button>
+          <button onclick="filterSchedule('finished')" id="sched-finished"
+            class="sched-btn px-3 py-1 rounded-lg text-xs bg-white/10 text-white hover:bg-white/20">終了</button>
+          <button onclick="filterSchedule('scheduled')" id="sched-scheduled"
+            class="sched-btn px-3 py-1 rounded-lg text-xs bg-white/10 text-white hover:bg-white/20">予定</button>
+        </div>
+      </div>
+      <div id="schedule-list" class="space-y-2"></div>
+    </section>
+
+  </main>
+
+  <script>
+    let allMatches = []
+    let allGroups = []
+    let allTeams = {}
+    let currentView = 'today'
+    let currentSchedFilter = 'all'
+    let currentStage = 'r32'
+
+    const TEAM_JA_MAP = {
+      '1':'メキシコ','2':'南アフリカ','3':'韓国','4':'チェコ',
+      '5':'カナダ','6':'スイス','7':'カタール','8':'ボスニア・ヘルツェゴビナ',
+      '9':'ブラジル','10':'モロッコ','11':'ハイチ','12':'スコットランド',
+      '13':'アメリカ','14':'パラグアイ','15':'オーストラリア','16':'トルコ',
+      '17':'ドイツ','18':'エクアドル','19':'コートジボワール','20':'キュラソー',
+      '21':'オランダ','22':'日本','23':'チュニジア','24':'スウェーデン',
+      '25':'ベルギー','26':'エジプト','27':'イラン','28':'ニュージーランド',
+      '29':'スペイン','30':'カーボベルデ','31':'サウジアラビア','32':'ウルグアイ',
+      '33':'フランス','34':'セネガル','35':'ノルウェー','36':'イラク',
+      '37':'アルゼンチン','38':'アルジェリア','39':'オーストリア','40':'ヨルダン',
+      '41':'ポルトガル','42':'コロンビア','43':'ウズベキスタン','44':'コンゴ民主共和国',
+      '45':'イングランド','46':'クロアチア','47':'ガーナ','48':'パナマ'
+    }
+
+    const STAGE_LABELS = {
+      'group': 'グループS', 'r32': 'R32', 'r16': 'R16',
+      'qf': '準々決勝', 'sf': '準決勝', 'third': '3位決定', 'final': '決勝'
+    }
+    const STAGE_COLORS = {
+      'group':'stage-badge-group','r32':'stage-badge-r32','r16':'stage-badge-r16',
+      'qf':'stage-badge-qf','sf':'stage-badge-sf','third':'stage-badge-final','final':'stage-badge-final'
+    }
+
+    function showView(v) {
+      currentView = v
+      document.querySelectorAll('[id^="view-"]').forEach(el => el.classList.add('hidden'))
+      document.getElementById('view-' + v)?.classList.remove('hidden')
+      document.querySelectorAll('.view-btn').forEach(b => {
+        b.className = 'view-btn px-3 py-1.5 rounded-lg text-sm bg-white/10 text-white hover:bg-white/20'
+      })
+      const active = document.getElementById('btn-' + v)
+      if (active) active.className = 'view-btn px-3 py-1.5 rounded-lg text-sm font-bold bg-green-600 text-white'
+    }
+
+    function showStage(stage) {
+      currentStage = stage
+      document.querySelectorAll('.bracket-stage').forEach(el => el.classList.add('hidden'))
+      document.getElementById('bracket-' + stage)?.classList.remove('hidden')
+    }
+
+    function teamHtml(team, label, size = 'md') {
+      if (!team) {
+        return \`<div class="flex items-center gap-2 \${size === 'sm' ? 'text-xs' : 'text-sm'}">
+          <div class="w-6 h-4 bg-white/10 rounded"></div>
+          <span class="text-gray-500 italic">\${label || 'TBD'}</span>
+        </div>\`
+      }
+      const nameJa = team.name_ja || team.name_en
+      const imgSize = size === 'sm' ? 'w-5 h-3.5' : 'w-7 h-5'
+      return \`<div class="flex items-center gap-2 \${size === 'sm' ? 'text-xs' : 'text-sm'}">
+        <img src="\${team.flag}" alt="\${team.name_en}" class="\${imgSize} object-cover rounded-sm" onerror="this.style.display='none'">
+        <span class="font-medium">\${nameJa}</span>
+        <span class="text-gray-500 text-xs">\${team.fifa_code || ''}</span>
+      </div>\`
+    }
+
+    function scoreDisplay(m) {
+      if (m.finished) {
+        const hasPen = m.home_score_penalties != null
+        return \`<div class="text-center">
+          <div class="text-2xl font-bold text-white">\${m.home_score} – \${m.away_score}</div>
+          \${hasPen ? \`<div class="text-xs text-yellow-400">PK \${m.home_score_penalties}–\${m.away_score_penalties}</div>\` : ''}
+          <div class="text-xs text-gray-500 mt-0.5">終了</div>
+        </div>\`
+      }
+      if (m.time_elapsed === 'live' || m.time_elapsed === 'in_progress') {
+        return \`<div class="text-center">
+          <div class="text-2xl font-bold text-white">\${m.home_score || 0} – \${m.away_score || 0}</div>
+          <div class="text-xs text-red-400 live-pulse font-bold mt-0.5">🔴 LIVE</div>
+        </div>\`
+      }
+      const dateStr = m.local_date ? formatDate(m.local_date) : ''
+      return \`<div class="text-center">
+        <div class="text-sm font-bold text-gray-400">VS</div>
+        <div class="text-xs text-gray-500 mt-1">\${dateStr}</div>
+      </div>\`
+    }
+
+    function formatDate(dateStr) {
+      if (!dateStr) return ''
+      // "06/20/2026 13:00" → "6/20 13:00"
+      const parts = dateStr.split(' ')
+      if (parts.length < 2) return dateStr
+      const [m, d] = parts[0].split('/')
+      return \`\${parseInt(m)}/\${parseInt(d)} \${parts[1]}\`
+    }
+
+    function matchCardHtml(m, compact = false) {
+      const isLive = m.time_elapsed === 'live' || m.time_elapsed === 'in_progress'
+      const stageLabel = STAGE_LABELS[m.type] || m.type
+      const stageClass = STAGE_COLORS[m.type] || 'stage-badge-group'
+
+      if (compact) {
+        return \`<div class="match-card p-3 rounded-xl border border-white/10 bg-white/5 flex items-center gap-3 \${isLive ? 'border-red-500/50 bg-red-900/10' : ''}">
+          <span class="\${stageClass} px-2 py-0.5 rounded text-xs font-bold flex-shrink-0">\${stageLabel} \${m.group || ''}</span>
+          <div class="flex-1 grid grid-cols-3 items-center gap-2">
+            <div>\${teamHtml(m.home_team, m.home_team_label, 'sm')}</div>
+            \${scoreDisplay(m)}
+            <div class="text-right">\${teamHtml(m.away_team, m.away_team_label, 'sm')}</div>
+          </div>
+        </div>\`
+      }
+
+      return \`<div class="match-card p-4 rounded-2xl border border-white/10 bg-white/5 \${isLive ? 'border-red-500/50 bg-red-900/10' : ''}">
+        <div class="flex items-center justify-between mb-3">
+          <span class="\${stageClass} px-2 py-0.5 rounded text-xs font-bold">\${stageLabel} \${m.group || ''}</span>
+          <span class="text-xs text-gray-500">\${m.local_date ? formatDate(m.local_date) : ''}</span>
+        </div>
+        <div class="grid grid-cols-3 items-center gap-4">
+          <div>\${teamHtml(m.home_team, m.home_team_label)}</div>
+          \${scoreDisplay(m)}
+          <div class="text-right">\${teamHtml(m.away_team, m.away_team_label)}</div>
+        </div>
+      </div>\`
+    }
+
+    function renderToday(matches) {
+      const list = document.getElementById('today-list')
+      const today = matches.filter(m => {
+        if (m.time_elapsed === 'live' || m.time_elapsed === 'in_progress') return true
+        if (!m.local_date) return false
+        const now = new Date()
+        const mm = String(now.getUTCMonth()+1).padStart(2,'0')
+        const dd = String(now.getUTCDate()).padStart(2,'0')
+        const yyyy = now.getUTCFullYear()
+        return m.local_date.startsWith(\`\${mm}/\${dd}/\${yyyy}\`)
+      })
+
+      // 直近の終了・予定試合も追加 (本日がなければ直近3日)
+      const recentFinished = matches
+        .filter(m => m.finished)
+        .slice(-4)
+
+      const upcoming = matches
+        .filter(m => !m.finished && m.time_elapsed !== 'live')
+        .slice(0, 4)
+
+      if (today.length === 0 && recentFinished.length === 0) {
+        list.innerHTML = '<p class="text-gray-400 text-center py-8">本日の試合はありません</p>'
+      } else {
+        let html = ''
+        if (today.filter(m => m.time_elapsed === 'live' || m.time_elapsed === 'in_progress').length > 0) {
+          html += '<div class="mb-2 text-xs text-red-400 font-bold uppercase tracking-wider">🔴 ライブ</div>'
+          html += today.filter(m => m.time_elapsed === 'live' || m.time_elapsed === 'in_progress')
+            .map(m => matchCardHtml(m)).join('')
+        }
+        if (today.filter(m => m.finished).length > 0) {
+          html += '<div class="mb-2 mt-4 text-xs text-gray-400 font-bold uppercase tracking-wider">本日の結果</div>'
+          html += today.filter(m => m.finished).map(m => matchCardHtml(m)).join('')
+        }
+        if (today.filter(m => !m.finished && m.time_elapsed !== 'live').length > 0) {
+          html += '<div class="mb-2 mt-4 text-xs text-gray-400 font-bold uppercase tracking-wider">本日予定</div>'
+          html += today.filter(m => !m.finished && m.time_elapsed !== 'live').map(m => matchCardHtml(m)).join('')
+        }
+        list.innerHTML = html || '<p class="text-gray-400 text-center py-4">本日の試合情報を確認中...</p>'
+      }
+
+      // 最近の結果 + 次の試合
+      const recentSection = document.createElement('div')
+      recentSection.innerHTML = \`
+        <div class="mt-6 grid md:grid-cols-2 gap-4">
+          <div>
+            <div class="mb-2 text-xs text-gray-400 font-bold uppercase tracking-wider">最近の結果</div>
+            \${recentFinished.reverse().map(m => matchCardHtml(m, true)).join('')}
+          </div>
+          <div>
+            <div class="mb-2 text-xs text-gray-400 font-bold uppercase tracking-wider">次の試合</div>
+            \${upcoming.map(m => matchCardHtml(m, true)).join('')}
+          </div>
+        </div>
+      \`
+      list.appendChild(recentSection)
+    }
+
+    function renderGroups(groups) {
+      const grid = document.getElementById('groups-grid')
+      grid.innerHTML = groups.map(g => {
+        const rows = g.teams.map((t, i) => {
+          const isAdvance = i < 2
+          const is3rd = i === 2
+          return \`<tr class="\${isAdvance ? 'bg-green-900/10' : is3rd ? 'bg-yellow-900/5' : ''}">
+            <td class="py-2 pl-3 pr-1">
+              <span class="w-5 h-5 rounded-full inline-flex items-center justify-center text-xs font-bold
+                \${isAdvance ? 'bg-green-500 text-black' : is3rd ? 'bg-yellow-600 text-white' : 'bg-white/10 text-gray-400'}">\${i+1}</span>
+            </td>
+            <td class="py-2 pr-2">
+              <div class="flex items-center gap-2">
+                \${t.flag ? \`<img src="\${t.flag}" alt="\${t.name_en}" class="w-6 h-4 object-cover rounded-sm">\` : ''}
+                <div>
+                  <p class="text-sm font-medium leading-tight">\${t.name_ja || t.name_en}</p>
+                  <p class="text-xs text-gray-500">\${t.fifa_code}</p>
+                </div>
+              </div>
+            </td>
+            <td class="py-2 text-center text-sm text-gray-300">\${t.mp || 0}</td>
+            <td class="py-2 text-center text-sm text-green-400">\${t.w || 0}</td>
+            <td class="py-2 text-center text-sm text-gray-400">\${t.d || 0}</td>
+            <td class="py-2 text-center text-sm text-red-400">\${t.l || 0}</td>
+            <td class="py-2 text-center text-sm text-gray-300">\${t.gf || 0}:\${t.ga || 0}</td>
+            <td class="py-2 text-center text-sm \${parseInt(t.gd) >= 0 ? 'text-green-400' : 'text-red-400'}">\${parseInt(t.gd) > 0 ? '+' : ''}\${t.gd || 0}</td>
+            <td class="py-2 pr-3 text-center font-bold text-yellow-400">\${t.pts || 0}</td>
+          </tr>\`
+        }).join('')
+        return \`<div class="rounded-2xl bg-white/5 border border-white/10 overflow-hidden">
+          <div class="px-4 py-3 bg-white/5 border-b border-white/10 flex items-center justify-between">
+            <h3 class="font-bold text-yellow-400">グループ \${g.group}</h3>
+            <span class="text-xs text-gray-500">試 勝 分 敗 得:失 差 点</span>
+          </div>
+          <table class="w-full">
+            <tbody>\${rows}</tbody>
+          </table>
+          <div class="px-3 py-2 border-t border-white/5 flex gap-3 text-xs text-gray-500">
+            <span><span class="inline-block w-3 h-3 rounded-full bg-green-500 mr-1"></span>決勝T進出</span>
+            <span><span class="inline-block w-3 h-3 rounded-full bg-yellow-600 mr-1"></span>3位通過候補</span>
+          </div>
+        </div>\`
+      }).join('')
+    }
+
+    function renderBracket(matches) {
+      const stages = ['r32', 'r16', 'qf', 'sf', 'final']
+      const stageMap = { r32: [], r16: [], qf: [], sf: [], final: [] }
+
+      for (const m of matches) {
+        if (m.type === 'r32') stageMap.r32.push(m)
+        else if (m.type === 'r16') stageMap.r16.push(m)
+        else if (m.type === 'qf') stageMap.qf.push(m)
+        else if (m.type === 'sf') stageMap.sf.push(m)
+        else if (m.type === 'final' || m.type === 'third') stageMap.final.push(m)
+      }
+
+      stages.forEach(stage => {
+        const el = document.getElementById('bracket-' + stage)
+        if (!el) return
+        const ms = stageMap[stage]
+        if (ms.length === 0) {
+          el.innerHTML = '<p class="text-gray-500 text-center py-8 text-sm">試合はまだ決定していません</p>'
+          return
+        }
+        el.innerHTML = '<div class="grid grid-cols-1 md:grid-cols-2 gap-3">' +
+          ms.sort((a,b) => parseInt(a.id) - parseInt(b.id))
+            .map(m => matchCardHtml(m)).join('') +
+          '</div>'
+      })
+    }
+
+    function filterSchedule(type) {
+      currentSchedFilter = type
+      document.querySelectorAll('.sched-btn').forEach(b => {
+        b.className = 'sched-btn px-3 py-1 rounded-lg text-xs bg-white/10 text-white hover:bg-white/20'
+      })
+      document.getElementById('sched-' + type).className =
+        'sched-btn px-3 py-1 rounded-lg text-xs font-bold bg-yellow-500 text-black'
+      renderSchedule()
+    }
+
+    function renderSchedule() {
+      const list = document.getElementById('schedule-list')
+      let matches = allMatches
+      if (currentSchedFilter === 'finished') matches = matches.filter(m => m.finished)
+      if (currentSchedFilter === 'scheduled') matches = matches.filter(m => !m.finished)
+
+      // 日付でグループ化
+      const byDate = {}
+      for (const m of matches) {
+        const key = m.local_date?.split(' ')[0] || 'TBD'
+        if (!byDate[key]) byDate[key] = []
+        byDate[key].push(m)
+      }
+
+      list.innerHTML = Object.entries(byDate).map(([date, ms]) => {
+        const [mo, da, yr] = date.split('/')
+        const label = date !== 'TBD' ? \`\${yr}年\${parseInt(mo)}月\${parseInt(da)}日\` : '日程未定'
+        return \`<div class="mb-4">
+          <div class="text-xs text-gray-400 font-bold uppercase tracking-wider mb-2 px-1">\${label}</div>
+          <div class="space-y-2">\${ms.map(m => matchCardHtml(m, true)).join('')}</div>
+        </div>\`
+      }).join('')
+    }
+
+    // Node.jsプロキシのベースURL (ポート3001)
+    // サンドボックス環境では hostname のポート番号部分を3001に差し替える
+    function proxyBase() {
+      const host = window.location.hostname
+      const proto = window.location.protocol
+      // "3000-xxxx..." 形式の場合はポートを3001に差し替え
+      const proxyHost = host.replace(/^3000-/, '3001-')
+      return proxyHost !== host
+        ? \`\${proto}//\${proxyHost}\`
+        : \`http://localhost:3001\`
+    }
+
+    async function loadAll() {
+      document.getElementById('loading').classList.remove('hidden')
+      document.querySelectorAll('[id^="view-"]').forEach(el => el.classList.add('hidden'))
+
+      const base = proxyBase()
+      try {
+        // グループ順位 + チーム (Node.jsプロキシ経由)
+        const [groupRes, teamsRes] = await Promise.all([
+          fetch(base + '/proxy/wc/standings'),
+          fetch(base + '/proxy/wc/teams'),
+        ])
+        const groupData = await groupRes.json()
+        const teamsData = await teamsRes.json()
+
+        if (groupData.success) allGroups = groupData.groups || []
+        if (teamsData.success) {
+          for (const t of teamsData.teams) allTeams[t.id] = t
+        }
+
+        renderGroups(allGroups)
+        document.getElementById('loading').classList.add('hidden')
+        showView(currentView)
+
+        // 試合データはプロキシ経由で非同期取得
+        loadMatchesViaProxy()
+
+      } catch (e) {
+        document.getElementById('loading').innerHTML =
+          '<p class="text-red-400 text-center py-8">データの取得に失敗しました。時間をおいて再試行してください。</p>'
+      }
+    }
+
+    // Node.jsプロキシ経由で試合データ取得
+    async function loadMatchesViaProxy() {
+      try {
+        const base = proxyBase()
+        const res = await fetch(base + '/proxy/wc/matches')
+        const data = await res.json()
+        if (!data.success) throw new Error(data.error || 'proxy error')
+
+        // name_jaをTEAM_JA_MAPで補完
+        allMatches = (data.matches || []).map(m => ({
+          ...m,
+          home_team: m.home_team ? { ...m.home_team, name_ja: TEAM_JA_MAP[String(m.home_team.id)] || m.home_team.name_en } : null,
+          away_team: m.away_team ? { ...m.away_team, name_ja: TEAM_JA_MAP[String(m.away_team.id)] || m.away_team.name_en } : null,
+        }))
+
+        renderToday(allMatches)
+        renderBracket(allMatches)
+        renderSchedule()
+        if (['today','bracket','schedule'].includes(currentView)) {
+          showView(currentView)
+        }
+      } catch (e) {
+        console.warn('試合データ取得失敗:', e)
+        document.getElementById('today-list').innerHTML =
+          '<p class="text-yellow-400 text-sm text-center py-6"><i class="fas fa-exclamation-triangle mr-1"></i>試合データの取得に失敗しました。</p>'
+      }
+    }
+
+    // 初期ロード
+    loadAll()
+    // 60秒ごと自動更新
+    setInterval(loadAll, 60000)
   </script>
 </body>
 </html>`

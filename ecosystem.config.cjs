@@ -10,6 +10,14 @@ module.exports = {
       watch: false,
       instances: 1,
       exec_mode: 'fork'
+    },
+    {
+      name: 'wc-proxy',
+      script: '/home/user/webapp/proxy-server.mjs',
+      interpreter: 'node',
+      watch: false,
+      instances: 1,
+      exec_mode: 'fork'
     }
   ]
 }
