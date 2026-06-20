@@ -1568,28 +1568,35 @@ function worldcupPageHtml(): string {
       }).join('')
     }
 
-    // Node.jsプロキシのベースURL (ポート3001)
-    // サンドボックス環境では hostname のポート番号部分を3001に差し替える
-    function proxyBase() {
+    // APIベースURL判定
+    // サンドボックス (3000-xxx.sandbox.novita.ai): Node.jsプロキシ port 3001 を使う
+    // 本番 (gensparksite.com 等): Cloudflare Worker の /api/wc を直接使う
+    function wcApiBase() {
       const host = window.location.hostname
       const proto = window.location.protocol
-      // "3000-xxxx..." 形式の場合はポートを3001に差し替え
-      const proxyHost = host.replace(/^3000-/, '3001-')
-      return proxyHost !== host
-        ? \`\${proto}//\${proxyHost}\`
-        : \`http://localhost:3001\`
+      if (/^3000-.*\.sandbox\.novita\.ai$/.test(host)) {
+        // サンドボックス: port 3001 プロキシ経由
+        return \`\${proto}//\${host.replace(/^3000-/, '3001-')}\`
+      }
+      // 本番: 同一オリジンの Cloudflare Worker API
+      return ''
+    }
+
+    // URLパスを環境別に解決
+    function wcUrl(sandboxPath, prodPath) {
+      const base = wcApiBase()
+      return base ? (base + sandboxPath) : prodPath
     }
 
     async function loadAll() {
       document.getElementById('loading').classList.remove('hidden')
       document.querySelectorAll('[id^="view-"]').forEach(el => el.classList.add('hidden'))
 
-      const base = proxyBase()
       try {
-        // グループ順位 + チーム (Node.jsプロキシ経由)
+        // グループ順位 + チーム
         const [groupRes, teamsRes] = await Promise.all([
-          fetch(base + '/proxy/wc/standings'),
-          fetch(base + '/proxy/wc/teams'),
+          fetch(wcUrl('/proxy/wc/standings', '/api/wc/standings')),
+          fetch(wcUrl('/proxy/wc/teams', '/api/wc/teams')),
         ])
         const groupData = await groupRes.json()
         const teamsData = await teamsRes.json()
@@ -1612,11 +1619,10 @@ function worldcupPageHtml(): string {
       }
     }
 
-    // Node.jsプロキシ経由で試合データ取得
+    // 試合データ取得
     async function loadMatchesViaProxy() {
       try {
-        const base = proxyBase()
-        const res = await fetch(base + '/proxy/wc/matches')
+        const res = await fetch(wcUrl('/proxy/wc/matches', '/api/wc/matches'))
         const data = await res.json()
         if (!data.success) throw new Error(data.error || 'proxy error')
 
